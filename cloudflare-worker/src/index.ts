@@ -9,6 +9,9 @@ import { Octokit } from '@octokit/rest';
 // of the cache ("Why is the API version response not updating?")
 const cacheAgeSeconds = 60 * 2; // 2 mins (30 requests per hour)
 
+// Too low and it returns only the 'continuous' release.
+const releasesPerPage = 10;
+
 export default {
 	async fetch(request: Request, _env: Env, _ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
@@ -38,23 +41,33 @@ async function version(request: Request, url: URL): Promise<Response> {
 	const { data: releases } = await octokit.repos.listReleases({
 		owner: 'deskflow',
 		repo: 'deskflow',
-		per_page: 2,
+		per_page: releasesPerPage,
 	});
 
-	const filteredReleases = releases.filter((release) => release.tag_name !== 'continuous');
-	if (filteredReleases.length > 0) {
-		const versionRaw = filteredReleases[0].tag_name;
-
-		// Backward compatibility: Strip any 'v' prefix, since the GUI doesn't expect one.
-		const response = new Response(versionRaw.replace(/^v/, ''));
-
-		// Works with the cache code earlier in the function to cache the response next time.
-		console.debug(`Caching response for ${cacheAgeSeconds} seconds`);
-		response.headers.set('Cache-Control', `public, max-age=${cacheAgeSeconds}`);
-		await cache.put(cacheKey, response.clone());
-
-		return response;
-	} else {
-		return new Response('No valid release found', { status: 404 });
+	if (releases.length === 0) {
+		return new Response('No releases found', { status: 404 });
 	}
+
+	console.debug(
+		'Fetched releases:',
+		releases.map((release) => release.tag_name)
+	);
+
+	const filteredReleases = releases.filter((release) => release.tag_name !== 'continuous');
+	console.debug(`Found ${filteredReleases.length} releases, excluding 'continuous'`);
+	if (filteredReleases.length == 0) {
+		return new Response('No releases found (except continuous)', { status: 404 });
+	}
+
+	const versionRaw = filteredReleases[0].tag_name;
+
+	// Backward compatibility: Strip any 'v' prefix, since the GUI doesn't expect one.
+	const response = new Response(versionRaw.replace(/^v/, ''));
+
+	// Works with the cache code earlier in the function to cache the response next time.
+	console.debug(`Caching response for ${cacheAgeSeconds} seconds`);
+	response.headers.set('Cache-Control', `public, max-age=${cacheAgeSeconds}`);
+	await cache.put(cacheKey, response.clone());
+
+	return response;
 }
