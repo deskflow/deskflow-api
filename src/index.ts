@@ -15,8 +15,8 @@ const releasesPerPage = 10;
 const repoUrl = 'https://github.com/deskflow/deskflow-api';
 
 type Stats = {
-	osFamily?: Record<string, number>;
 	os?: Record<string, number>;
+	osFamily?: Record<string, number>;
 	language?: Record<string, number>;
 	version?: Record<string, number>;
 };
@@ -191,8 +191,8 @@ async function getSortedStats(env: Env, entryKey: string): Promise<Stats> {
 	const entry = await env.APP_STATS.get(entryKey);
 	const stats = entry ? JSON.parse(entry) : {};
 	return {
-		os: stats.os ? sortByValueDesc(stats.os) : {},
 		osFamily: stats.osFamily ? sortByValueDesc(stats.osFamily) : {},
+		os: stats.os ? sortByValueDesc(stats.os) : {},
 		language: stats.language ? sortByValueDesc(stats.language) : {},
 		version: stats.version ? sortByValueDesc(stats.version) : {},
 	};
