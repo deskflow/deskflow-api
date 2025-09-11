@@ -15,8 +15,8 @@ const releasesPerPage = 10;
 const repoUrl = 'https://github.com/deskflow/deskflow-api';
 
 type Stats = {
-	os?: Record<string, number>;
 	osFamily?: Record<string, number>;
+	os?: Record<string, number>;
 	language?: Record<string, number>;
 	version?: Record<string, number>;
 };
