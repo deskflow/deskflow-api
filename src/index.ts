@@ -30,8 +30,7 @@ async function version(request: Request, url: URL): Promise<Response> {
 	}
 
 	const cache = caches.default;
-	const cacheKey = new Request(request);
-	const cachedResponse = await cache.match(cacheKey);
+	const cachedResponse = await cache.match(request);
 	if (cachedResponse) {
 		console.debug('Cache hit for version');
 		return cachedResponse;
@@ -67,7 +66,7 @@ async function version(request: Request, url: URL): Promise<Response> {
 	// Works with the cache code earlier in the function to cache the response next time.
 	console.debug(`Caching response for ${cacheAgeSeconds} seconds`);
 	response.headers.set('Cache-Control', `public, max-age=${cacheAgeSeconds}`);
-	await cache.put(cacheKey, response.clone());
+	await cache.put(request, response);
 
 	return response;
 }
