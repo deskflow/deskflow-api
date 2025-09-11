@@ -14,6 +14,13 @@ const releasesPerPage = 10;
 
 const repoUrl = 'https://github.com/deskflow/deskflow-api';
 
+type Stats = {
+	os?: Record<string, number>;
+	osFamily?: Record<string, number>;
+	language?: Record<string, number>;
+	version?: Record<string, number>;
+};
+
 export default {
 	async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
 		try {
@@ -30,26 +37,39 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
-	logClient(request);
+	await updatePopularityContest(request, env);
 	const url = new URL(request.url);
-	if (url.pathname.startsWith('/version')) {
+	if (url.pathname === '/') {
+		return index(url);
+	} else if (url.pathname.startsWith('/version')) {
 		return await version(request, env);
-	} else if (url.pathname === '/') {
-		if (url.searchParams.get('testError') !== null) {
-			throw new Error('Test error');
-		}
-		return new Response(`Deskflow API. Source code: ${repoUrl}`, { status: 200 });
+	} else if (url.pathname.startsWith('/stats')) {
+		return await stats(env);
 	} else {
 		return new Response('Not found', { status: 404 });
 	}
 }
 
-function logClient(request: Request) {
-	const userAgent = request.headers.get('user-agent') ?? 'unknown';
-	const appLanguage = request.headers.get('X-Deskflow-Language') ?? 'unknown';
-	const appVersion = request.headers.get('X-Deskflow-Version') ?? 'unknown';
-	console.debug('User-Agent:', userAgent);
-	console.debug('App info:', `Language=${appLanguage}, Version=${appVersion}`);
+function index(url: URL) {
+	if (url.searchParams.get('testError') !== null) {
+		throw new Error('Test error');
+	}
+	const htmlRows = [
+		`<style>`,
+		`  body { font-family: sans-serif; }`,
+		`  @media (prefers-color-scheme: dark) {`,
+		`    body { background: #111; color: #eee; }`,
+		`    a { color: #4ea1f3; }`,
+		`  }`,
+		`</style>`,
+		`<h1>Deskflow API</h1>`,
+		`<p>Source code: <a href="${repoUrl}">${repoUrl}</a></p>`,
+		`<p>Popularity contest: <a href="/stats">/stats</a> (JSON)</p>`,
+	];
+	return new Response(htmlRows.join('\n'), {
+		status: 200,
+		headers: { 'Content-Type': 'text/html' },
+	});
 }
 
 async function version(request: Request, env: Env): Promise<Response> {
@@ -108,4 +128,88 @@ async function version(request: Request, env: Env): Promise<Response> {
 	});
 
 	return new Response(version);
+}
+
+function getOsFamily(os: string | null): string | null {
+	if (!os) return null;
+	if (os.includes('Windows')) return 'Windows';
+	if (os.includes('macOS')) return 'macOS';
+	if (['Linux', 'Flatpak'].some((term) => os.includes(term))) return 'Linux';
+	if (os.includes('BSD')) return 'BSD';
+	return 'Other';
+}
+
+async function updatePopularityContest(request: Request, env: Env): Promise<void> {
+	const userAgent = request.headers.get('user-agent') ?? null;
+	const appLanguage = request.headers.get('X-Deskflow-Language') ?? null;
+	const appVersion = request.headers.get('X-Deskflow-Version') ?? null;
+	const os = userAgent ? /on (.+)/.exec(userAgent)?.[1] ?? null : null;
+	const osFamily = getOsFamily(os);
+	console.debug('User-Agent:', userAgent);
+	console.debug('App info:', `OS=${os} (${osFamily}), Language=${appLanguage}, Version=${appVersion}`);
+
+	if (!appLanguage && !appVersion && !os) {
+		console.debug('No stats info provided, skipping popularity contest update');
+		return;
+	}
+
+	const date = new Date();
+	const monthKey = date.toISOString().substring(0, 7); // e.g. "2024-04"
+
+	const entry = await env.APP_STATS.get(monthKey);
+	const stats: Stats = entry ? JSON.parse(entry) : {};
+
+	if (os) {
+		if (!stats.os) stats.os = {};
+		stats.os[os] = (stats.os[os] ?? 0) + 1;
+	}
+
+	if (osFamily) {
+		if (!stats.osFamily) stats.osFamily = {};
+		stats.osFamily[osFamily] = (stats.osFamily[osFamily] ?? 0) + 1;
+	}
+
+	if (appLanguage) {
+		if (!stats.language) stats.language = {};
+		stats.language[appLanguage] = (stats.language[appLanguage] ?? 0) + 1;
+	}
+
+	if (appVersion) {
+		if (!stats.version) stats.version = {};
+		stats.version[appVersion] = (stats.version[appVersion] ?? 0) + 1;
+	}
+
+	console.debug(`Updating stats for ${monthKey}`);
+	await env.APP_STATS.put(monthKey, JSON.stringify(stats));
+}
+
+function sortByValueDesc<T extends Record<string, number>>(obj: T): T {
+	return Object.fromEntries(Object.entries(obj).sort(([, a], [, b]) => b - a)) as T;
+}
+
+async function getSortedStats(env: Env, entryKey: string): Promise<Stats> {
+	const entry = await env.APP_STATS.get(entryKey);
+	const stats = entry ? JSON.parse(entry) : {};
+	return {
+		os: stats.os ? sortByValueDesc(stats.os) : {},
+		osFamily: stats.osFamily ? sortByValueDesc(stats.osFamily) : {},
+		language: stats.language ? sortByValueDesc(stats.language) : {},
+		version: stats.version ? sortByValueDesc(stats.version) : {},
+	};
+}
+
+async function stats(env: Env): Promise<Response> {
+	const date = new Date();
+	const lastMonthDate = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+
+	const thisMonthKey = date.toISOString().substring(0, 7); // e.g. "2024-04"
+	const lastMonthKey = lastMonthDate.toISOString().substring(0, 7); // e.g. "2024-03"
+
+	console.debug(`Fetching stats for ${thisMonthKey} and ${lastMonthKey}`);
+
+	const thisMonth = await getSortedStats(env, thisMonthKey);
+	const lastMonth = await getSortedStats(env, lastMonthKey);
+
+	const result = { thisMonth: { date: thisMonthKey, ...thisMonth }, lastMonth: { date: lastMonthKey, ...lastMonth } };
+	return new Response(JSON.stringify(result, null, 2), { headers: { 'Content-Type': 'application/json' } });
 }
