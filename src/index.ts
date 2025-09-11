@@ -36,6 +36,8 @@ async function version(request: Request, url: URL): Promise<Response> {
 		return cachedResponse;
 	}
 
+	console.debug('Cache miss for version, fetching from GitHub');
+
 	const octokit = new Octokit();
 	const { data: releases } = await octokit.repos.listReleases({
 		owner: 'deskflow',
