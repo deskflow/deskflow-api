@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 import { Octokit } from '@octokit/rest';
+import { DurableObject } from 'cloudflare:workers';
 
 // With no API token, we can only make 60 requests per hour, but if we cache the response,
 // we can limit our requests to once every 2 minutes (which is 30 per hour).
@@ -21,6 +22,25 @@ type Stats = {
 	version?: Record<string, number>;
 };
 
+export class SlowKV extends DurableObject<Env> {
+	constructor(ctx: DurableObjectState, env: Env) {
+		super(ctx, env);
+	}
+
+	async set(key: string, data: string) {
+		await this.ctx.storage.put(key, data);
+	}
+
+	async getString(key: string): Promise<string | undefined> {
+		return this.ctx.storage.get<string>(key);
+	}
+
+	async getStats(key: string): Promise<Stats> {
+		const stats = await this.ctx.storage.get<string>(key);
+		return stats ? JSON.parse(stats) : {};
+	}
+}
+
 export default {
 	async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
 		try {
@@ -37,7 +57,14 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
-	await updatePopularityContest(request, env);
+	try {
+		// Void instead of await for better performance; side-effects are not relevant to the response.
+		void updatePopularityContest(request, env);
+	} catch (error) {
+		// Not very important if this fails, so just log a warning.
+		console.warn('Error updating popularity contest:', error);
+	}
+
 	const url = new URL(request.url);
 	if (url.pathname === '/') {
 		return index(url);
@@ -100,6 +127,14 @@ async function version(request: Request, env: Env): Promise<Response> {
 		}
 	}
 
+	// HACK: Temporarily use the slow KV for reads, until our daily limits are lifted.
+	const slowKV = getSlowKV(env);
+	const slowCachedVersion = await slowKV.getString('version');
+	if (slowCachedVersion) {
+		console.debug('Using slow KV version:', slowCachedVersion);
+		return new Response(slowCachedVersion);
+	}
+
 	console.debug('Cache miss for version, fetching from GitHub');
 	const octokit = new Octokit();
 	const { data: releases } = await octokit.repos.listReleases({
@@ -122,10 +157,18 @@ async function version(request: Request, env: Env): Promise<Response> {
 	const versionRaw = filteredReleases[0].tag_name;
 	const version = versionRaw.replace(/^v/, '');
 
-	console.debug(`Latest version is ${version}, storing in KV`);
-	await env.APP_VERSION.put('latest', version, {
-		metadata: { fetchedAt: new Date().toISOString() },
-	});
+	try {
+		console.debug(`Latest version is ${version}, storing in KV`);
+		await env.APP_VERSION.put('latest', version, {
+			metadata: { fetchedAt: new Date().toISOString() },
+		});
+	} catch (error) {
+		// HACK: Temporarily use the slow KV for reads, until our daily limits are lifted.
+		console.warn('Error storing version in KV:', error);
+		console.debug('Falling back to slow KV');
+		const slowKV = getSlowKV(env);
+		await slowKV.set('version', version);
+	}
 
 	return new Response(version);
 }
@@ -156,8 +199,8 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 	const date = new Date();
 	const monthKey = date.toISOString().substring(0, 7); // e.g. "2024-04"
 
-	const entry = await env.APP_STATS.get(monthKey);
-	const stats: Stats = entry ? JSON.parse(entry) : {};
+	const slowKV = getSlowKV(env);
+	const stats = await slowKV.getStats(monthKey);
 
 	if (os) {
 		if (!stats.os) stats.os = {};
@@ -180,7 +223,14 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 	}
 
 	console.debug(`Updating stats for ${monthKey}`);
-	await env.APP_STATS.put(monthKey, JSON.stringify(stats));
+	await slowKV.set(monthKey, JSON.stringify(stats));
+}
+
+// Effectively a slower version of the Worker KV, but has no read/write limits.
+function getSlowKV(env: Env) {
+	console.debug('Getting slow KV durable object');
+	const objectId = env.SlowKV.idFromName('default');
+	return env.SlowKV.get(objectId);
 }
 
 function sortByValueDesc<T extends Record<string, number>>(obj: T): T {
@@ -188,8 +238,8 @@ function sortByValueDesc<T extends Record<string, number>>(obj: T): T {
 }
 
 async function getSortedStats(env: Env, entryKey: string): Promise<Stats> {
-	const entry = await env.APP_STATS.get(entryKey);
-	const stats = entry ? JSON.parse(entry) : {};
+	const slowKV = getSlowKV(env);
+	const stats = await slowKV.getStats(entryKey);
 	return {
 		osFamily: stats.osFamily ? sortByValueDesc(stats.osFamily) : {},
 		os: stats.os ? sortByValueDesc(stats.os) : {},
