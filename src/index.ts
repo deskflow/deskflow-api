@@ -120,9 +120,9 @@ async function version(request: Request, env: Env): Promise<Response> {
 
 		const fetchedAtDate = new Date(fetchedAt);
 		const ageSeconds = (Date.now() - fetchedAtDate.getTime()) / 1000;
-		console.debug(`KV version ${cachedVersion} found, age is ${Math.round(ageSeconds)} seconds`);
-		if (ageSeconds < cacheAgeSeconds) {
-			console.debug('Cache valid, returning cached version');
+		const isValid = ageSeconds < cacheAgeSeconds;
+		console.debug(`Version KV found, value=${cachedVersion}, age=${Math.round(ageSeconds)}s (${isValid ? 'valid' : 'expired'})`);
+		if (isValid) {
 			return new Response(cachedVersion);
 		}
 	}
@@ -174,20 +174,52 @@ async function version(request: Request, env: Env): Promise<Response> {
 }
 
 function getOsFamily(os: string | null): string | null {
-	if (!os) return null;
-	if (os.includes('Windows')) return 'Windows';
-	if (os.includes('macOS')) return 'macOS';
-	if (['Linux', 'Flatpak'].some((term) => os.includes(term))) return 'Linux';
-	if (os.includes('BSD')) return 'BSD';
+	const lower = os?.toLowerCase() ?? null;
+	if (!lower) return null;
+	if (lower.includes('windows')) return 'Windows';
+	if (lower.includes('macos')) return 'macOS';
+	if (['linux', 'flatpak'].some((term) => lower.includes(term))) return 'Linux';
+	if (lower.includes('bsd')) return 'BSD';
 	return 'Other';
+}
+
+function parseUserAgent(userAgent: string, headers: Headers) {
+	// If we're using RFC 9110 User-Agent, use that instead of custom headers (which are obsolete).
+	const rfc9110 = /.+\/(.+) \((.+)\)/;
+	if (rfc9110.test(userAgent)) {
+		console.debug('Parsing RFC 9110 User-Agent');
+		const parts = rfc9110.exec(userAgent);
+		if (!parts) {
+			throw new Error('Invalid RFC 9110 User-Agent format');
+		}
+
+		// Based on app code that generates the User-Agent:
+		//   const static auto userAgent = QString("%1/%2 (%3; %4; %5; %6)")
+		//     .arg(kAppName, kVersion, os, osFamily, arch, language);
+		const metadata = parts[2].split(';').map((part) => part.trim());
+		const os = metadata[0] ?? null;
+		const osFamily = getOsFamily(metadata[1] ?? null);
+		const appVersion = metadata[2] ?? null;
+		const appLanguage = metadata[3] ?? null;
+		return { os, osFamily, appLanguage, appVersion };
+	} else {
+		console.debug('Parsing legacy User-Agent and custom headers');
+
+		const appLanguage = headers.get('X-Deskflow-Language') ?? null;
+		const appVersion = headers.get('X-Deskflow-Version') ?? null;
+
+		const os = userAgent ? /on (.+)/.exec(userAgent)?.[1] ?? null : null;
+		const osFamily = getOsFamily(os);
+
+		return { os, osFamily, appLanguage, appVersion };
+	}
 }
 
 async function updatePopularityContest(request: Request, env: Env): Promise<void> {
 	const userAgent = request.headers.get('user-agent') ?? null;
-	const appLanguage = request.headers.get('X-Deskflow-Language') ?? null;
-	const appVersion = request.headers.get('X-Deskflow-Version') ?? null;
-	const os = userAgent ? /on (.+)/.exec(userAgent)?.[1] ?? null : null;
-	const osFamily = getOsFamily(os);
+	if (!userAgent) throw new Error('User-Agent header is missing');
+
+	const { os, osFamily, appLanguage, appVersion } = parseUserAgent(userAgent, request.headers);
 	console.debug('User-Agent:', userAgent);
 	console.debug('App info:', `OS=${os} (${osFamily}), Language=${appLanguage}, Version=${appVersion}`);
 
