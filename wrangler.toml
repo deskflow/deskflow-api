@@ -11,6 +11,10 @@ enabled = true
 binding = "APP_VERSION"
 id = "9eaad23626614bccaf775d1af0069a6c"
 
-[[kv_namespaces]]
-binding = "APP_STATS"
-id = "6c16f628b98d47d1a63519d0b535d6e1"
+[[durable_objects.bindings]]
+name = "SlowKV"
+class_name = "SlowKV"
+
+[[migrations]]
+tag = "<v1>"
+new_sqlite_classes = ["SlowKV"]
