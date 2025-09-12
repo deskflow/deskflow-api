@@ -184,8 +184,13 @@ function getOsFamily(os: string | null): string | null {
 }
 
 function parseUserAgent(userAgent: string, headers: Headers) {
+	if (!userAgent.includes('Deskflow')) {
+		console.debug('User-Agent does not contain Deskflow, skipping parsing');
+		return null;
+	}
+
 	// If we're using RFC 9110 User-Agent, use that instead of custom headers (which are obsolete).
-	const rfc9110 = /.+\/(.+) \((.+)\)/;
+	const rfc9110 = /Deskflow\/(.+) \((.+)\)/;
 	if (rfc9110.test(userAgent)) {
 		console.debug('Parsing RFC 9110 User-Agent');
 		const parts = rfc9110.exec(userAgent);
@@ -208,7 +213,7 @@ function parseUserAgent(userAgent: string, headers: Headers) {
 		const appLanguage = headers.get('X-Deskflow-Language') ?? null;
 		const appVersion = headers.get('X-Deskflow-Version') ?? null;
 
-		const os = userAgent ? /on (.+)/.exec(userAgent)?.[1] ?? null : null;
+		const os = userAgent ? /Deskflow .+ on (.+)/.exec(userAgent)?.[1] ?? null : null;
 		const osFamily = getOsFamily(os);
 
 		return { os, osFamily, appLanguage, appVersion };
@@ -219,12 +224,19 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 	const userAgent = request.headers.get('user-agent') ?? null;
 	if (!userAgent) throw new Error('User-Agent header is missing');
 
-	const { os, osFamily, appLanguage, appVersion } = parseUserAgent(userAgent, request.headers);
 	console.debug('User-Agent:', userAgent);
+	const info = parseUserAgent(userAgent, request.headers);
+
+	if (!info) {
+		console.debug('Unrecognized user agent, skipping popularity contest update');
+		return;
+	}
+
+	const { os, osFamily, appLanguage, appVersion } = info;
 	console.debug('App info:', `OS=${os} (${osFamily}), Language=${appLanguage}, Version=${appVersion}`);
 
-	if (!appLanguage && !appVersion && !os) {
-		console.debug('No stats info provided, skipping popularity contest update');
+	if (!os && !osFamily && !appLanguage && !appVersion) {
+		console.debug('No user agent info provided, skipping popularity contest update');
 		return;
 	}
 
@@ -254,7 +266,7 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 		stats.version[appVersion] = (stats.version[appVersion] ?? 0) + 1;
 	}
 
-	console.debug(`Updating stats for ${monthKey}`);
+	console.debug(`Updating popularity contest for ${monthKey}`);
 	await slowKV.set(monthKey, JSON.stringify(stats));
 }
 
