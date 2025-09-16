@@ -4,6 +4,7 @@
 import { Octokit } from '@octokit/rest';
 import { DurableObject } from 'cloudflare:workers';
 
+// Important: Cache lifetime must not be too low or we'll hit the KV put rate limit.
 // We're using a GitHub token since the public rate limit is easily hit on shared egress IPs;
 // Workers from other orgs could also be hitting the GitHub API from the same IP addresses,
 // so we can't rely on the public rate limit of 60 requests per hour not being exceeded.
