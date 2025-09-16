@@ -76,9 +76,9 @@ export class VotesByIP extends DurableObject<Env> {
 }
 
 export default {
-	async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		try {
-			return await handleRequest(request, env);
+			return await handleRequest(request, env, ctx);
 		} catch (error) {
 			console.error('Server error:', error);
 
@@ -90,10 +90,10 @@ export default {
 	},
 } satisfies ExportedHandler<Env>;
 
-async function handleRequest(request: Request, env: Env): Promise<Response> {
+async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	try {
 		// Very slow but must be awaited or the DO state isn't saved.
-		await updatePopularityContest(request, env);
+		await updatePopularityContest(request, env, ctx);
 	} catch (error) {
 		// Not very important if this fails, so just log a warning.
 		console.warn('Error updating popularity contest:', error);
@@ -250,7 +250,7 @@ function hasVoted(data: Votes[], userAgent: string): boolean {
 	return result;
 }
 
-async function updatePopularityContest(request: Request, env: Env): Promise<void> {
+async function updatePopularityContest(request: Request, env: Env, ctx: ExecutionContext): Promise<void> {
 	const userAgent = request.headers.get('user-agent') ?? null;
 	if (!userAgent) throw new Error('User-Agent header is missing');
 
@@ -311,10 +311,12 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 	}
 
 	console.log(`Updating popularity contest for ${monthKey}`);
-	await slowKV.set(monthKey, JSON.stringify(stats));
+	const statsPromise = slowKV.set(monthKey, JSON.stringify(stats));
+	ctx.waitUntil(statsPromise);
 
 	console.log(`Recording vote for IP ${ip}`);
-	await votesByIP.recordVote(votes, ip, userAgent);
+	const votePromise = votesByIP.recordVote(votes, ip, userAgent);
+	ctx.waitUntil(votePromise);
 }
 
 // Effectively a slower version of the Worker KV, but has no read/write limits.

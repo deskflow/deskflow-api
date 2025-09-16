@@ -21,8 +21,4 @@ class_name = "VotesByIP"
 
 [[migrations]]
 tag = "<v1>"
-new_sqlite_classes = ["SlowKV"]
-
-[[migrations]]
-tag = "<v1>"
-new_sqlite_classes = ["VotesByIP"]
+new_sqlite_classes = ["SlowKV", "VotesByIP"]
