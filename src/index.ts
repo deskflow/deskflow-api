@@ -7,9 +7,9 @@ import { DurableObject } from 'cloudflare:workers';
 // We're using a GitHub token since the public rate limit is easily hit on shared egress IPs;
 // Workers from other orgs could also be hitting the GitHub API from the same IP addresses,
 // so we can't rely on the public rate limit of 60 requests per hour not being exceeded.
-// The token gives us a higher rate limit of 5000 requests per hour. We could cache for 1 second
-// instead of 60 seconds, but there's no real need since the version doesn't change often.
-const cacheAgeSeconds = 60;
+// The token gives us a higher rate limit of 5000 requests per hour, but there is no need for
+// us to update the cache often, and it takes around 2 seconds for GitHub to respond.
+const cacheAgeSeconds = 60 * 5; // 5 minutes
 
 // Too low and it returns only the 'continuous' release.
 const releasesPerPage = 10;
