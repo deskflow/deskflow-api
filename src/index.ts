@@ -22,6 +22,11 @@ type Stats = {
 	version?: Record<string, number>;
 };
 
+type Votes = {
+	isoDateText: string;
+	userAgent: string;
+};
+
 export class SlowKV extends DurableObject<Env> {
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -38,6 +43,29 @@ export class SlowKV extends DurableObject<Env> {
 	async getStats(key: string): Promise<Stats> {
 		const stats = await this.ctx.storage.get<string>(key);
 		return stats ? JSON.parse(stats) : {};
+	}
+}
+
+export class PopularityContest extends DurableObject<Env> {
+	constructor(ctx: DurableObjectState, env: Env) {
+		super(ctx, env);
+	}
+
+	async recordVote(votes: Votes[], ip: string, userAgent: string) {
+		const data = [...votes, { isoDateText: new Date().toISOString(), userAgent }];
+		await this.ctx.storage.put(ip, JSON.stringify(data));
+	}
+
+	async findVotes(ip: string): Promise<Votes[]> {
+		const record = await this.ctx.storage.get<string>(ip);
+		if (record == null) {
+			console.debug(`No votes for IP ${ip}`);
+			return [];
+		}
+
+		const data = JSON.parse(record) as Votes[];
+		console.debug(`Found votes for IP ${ip}:`, data);
+		return data;
 	}
 }
 
@@ -127,14 +155,6 @@ async function version(request: Request, env: Env): Promise<Response> {
 		}
 	}
 
-	// HACK: Temporarily use the slow KV for reads, until our daily limits are lifted.
-	const slowKV = getSlowKV(env);
-	const slowCachedVersion = await slowKV.getString('version');
-	if (slowCachedVersion) {
-		console.debug('Using slow KV version:', slowCachedVersion);
-		return new Response(slowCachedVersion);
-	}
-
 	console.debug('Cache miss for version, fetching from GitHub');
 	const octokit = new Octokit();
 	const { data: releases } = await octokit.repos.listReleases({
@@ -157,18 +177,10 @@ async function version(request: Request, env: Env): Promise<Response> {
 	const versionRaw = filteredReleases[0].tag_name;
 	const version = versionRaw.replace(/^v/, '');
 
-	try {
-		console.debug(`Latest version is ${version}, storing in KV`);
-		await env.APP_VERSION.put('latest', version, {
-			metadata: { fetchedAt: new Date().toISOString() },
-		});
-	} catch (error) {
-		// HACK: Temporarily use the slow KV for reads, until our daily limits are lifted.
-		console.warn('Error storing version in KV:', error);
-		console.debug('Falling back to slow KV');
-		const slowKV = getSlowKV(env);
-		await slowKV.set('version', version);
-	}
+	console.debug(`Latest version is ${version}, storing in KV`);
+	await env.APP_VERSION.put('latest', version, {
+		metadata: { fetchedAt: new Date().toISOString() },
+	});
 
 	return new Response(version);
 }
@@ -220,6 +232,18 @@ function parseUserAgent(userAgent: string, headers: Headers) {
 	}
 }
 
+// Count a vote as being from the same IP, user agent, and day.
+// Allow multiple votes from the same IP, since a user will have multiple computers.
+function hasVoted(data: Votes[], userAgent: string): boolean {
+	const now = new Date().toISOString().slice(0, 10);
+	const result = data.some((vote) => {
+		return vote.userAgent === userAgent && vote.isoDateText.slice(0, 10) === now;
+	});
+
+	console.debug(`Found ${data.length} votes matching user agent and date`);
+	return result;
+}
+
 async function updatePopularityContest(request: Request, env: Env): Promise<void> {
 	const userAgent = request.headers.get('user-agent') ?? null;
 	if (!userAgent) throw new Error('User-Agent header is missing');
@@ -243,6 +267,16 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 	const date = new Date();
 	const monthKey = date.toISOString().substring(0, 7); // e.g. "2024-04"
 
+	console.debug(`Checking for existing vote`);
+	const popularityContest = getPopularityContest(env);
+	const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+	const votes = await popularityContest.findVotes(ip);
+	if (hasVoted(votes, userAgent)) {
+		console.debug(`IP ${ip} has already voted recently, skipping popularity contest update`);
+		return;
+	}
+
+	console.debug(`Fetching existing stats for ${monthKey}`);
 	const slowKV = getSlowKV(env);
 	const stats = await slowKV.getStats(monthKey);
 
@@ -268,13 +302,20 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 
 	console.debug(`Updating popularity contest for ${monthKey}`);
 	await slowKV.set(monthKey, JSON.stringify(stats));
+
+	console.debug(`Recording vote for IP ${ip}`);
+	await popularityContest.recordVote(votes, ip, userAgent);
 }
 
 // Effectively a slower version of the Worker KV, but has no read/write limits.
 function getSlowKV(env: Env) {
-	console.debug('Getting slow KV durable object');
 	const objectId = env.SlowKV.idFromName('default');
 	return env.SlowKV.get(objectId);
+}
+
+function getPopularityContest(env: Env) {
+	const objectId = env.PopularityContest.idFromName('default');
+	return env.PopularityContest.get(objectId);
 }
 
 function sortByValueDesc<T extends Record<string, number>>(obj: T): T {
