@@ -15,6 +15,10 @@ id = "9eaad23626614bccaf775d1af0069a6c"
 name = "SlowKV"
 class_name = "SlowKV"
 
+[[durable_objects.bindings]]
+name = "PopularityContest"
+class_name = "PopularityContest"
+
 [[migrations]]
 tag = "<v1>"
-new_sqlite_classes = ["SlowKV"]
+new_sqlite_classes = ["SlowKV", "PopularityContest"]
