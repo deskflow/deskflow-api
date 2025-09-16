@@ -140,9 +140,6 @@ async function version(request: Request, env: Env): Promise<Response> {
 	// Previously we used the Worker Cache API, but this was not a valid approach for avoiding
 	// rate limits, since the cache is per-POP (Cloudflare point of presence) of which there could
 	// be hundreds worldwide. So we switched to using Workers KV, which is global.
-	// We could use a GitHub token to increase the rate limit, but that would be a secret
-	// to manage, and we don't really need the extra limit since we can simply cache in KV.
-	// It's also possible that the rate limit for the token could be reached if our user count increases.
 	const { value: cachedVersion, metadata } = await env.APP_VERSION.getWithMetadata('latest');
 	if (cachedVersion) {
 		const { fetchedAt } = metadata as { fetchedAt: string };
