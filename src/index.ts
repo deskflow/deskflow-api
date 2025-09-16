@@ -1,14 +1,19 @@
-// SPDX-Copyright-Text: 2024 Symless Ltd.
+// SPDX-Copyright-Text: 2024-2025 Symless Ltd.
 // SPDX-License-Identifier: GPL-2.0-only
 
 import { Octokit } from '@octokit/rest';
 import { DurableObject } from 'cloudflare:workers';
 
 // With no API token, we can only make 60 requests per hour, but if we cache the response,
-// we can limit our requests to once every 2 minutes (which is 30 per hour).
+// we can limit our requests to once every 6 minutes (which is 10 per hour).
 // We could limit this further to like 1 per hour, but this might confuse developers not aware
 // of the cache ("Why is the API version response not updating?")
-const cacheAgeSeconds = 60 * 2; // 2 mins (30 requests per hour)
+// It's also worth considering that we're probably not the only users of the GitHub API from this
+// IP address, so we should be conservative to avoid hitting the rate limit.
+// If we're still hitting the rate limit, we should consider using a GitHub token, but that
+// would increase maintenance costs as it requires managing a secret (which could expire,
+// get deleted, etc).
+const cacheAgeSeconds = 60 * 6; // 6 mins (10 requests per hour)
 
 // Too low and it returns only the 'continuous' release.
 const releasesPerPage = 10;
@@ -87,8 +92,8 @@ export default {
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
 	try {
-		// Void instead of await for better performance; side-effects are not relevant to the response.
-		void updatePopularityContest(request, env);
+		// Very slow but must be awaited or the DO state isn't saved.
+		await updatePopularityContest(request, env);
 	} catch (error) {
 		// Not very important if this fails, so just log a warning.
 		console.warn('Error updating popularity contest:', error);
