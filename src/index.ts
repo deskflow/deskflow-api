@@ -16,6 +16,7 @@ const releasesPerPage = 10;
 const repoUrl = 'https://github.com/deskflow/deskflow-api';
 
 type Stats = {
+	votes?: number;
 	os?: Record<string, number>;
 	osFamily?: Record<string, number>;
 	language?: Record<string, number>;
@@ -59,7 +60,7 @@ export class VotesByIP extends DurableObject<Env> {
 	async findVotes(ip: string): Promise<Votes[]> {
 		const record = await this.ctx.storage.get<string>(ip);
 		if (record == null) {
-			console.debug(`No votes for IP ${ip}`);
+			console.log(`No votes for IP ${ip}`);
 			return [];
 		}
 
@@ -149,13 +150,13 @@ async function version(request: Request, env: Env): Promise<Response> {
 		const fetchedAtDate = new Date(fetchedAt);
 		const ageSeconds = (Date.now() - fetchedAtDate.getTime()) / 1000;
 		const isValid = ageSeconds < cacheAgeSeconds;
-		console.debug(`Version KV found, value=${cachedVersion}, age=${Math.round(ageSeconds)}s (${isValid ? 'valid' : 'expired'})`);
+		console.log(`Version KV found, value=${cachedVersion}, age=${Math.round(ageSeconds)}s (${isValid ? 'valid' : 'expired'})`);
 		if (isValid) {
 			return new Response(cachedVersion);
 		}
 	}
 
-	console.debug('Cache miss for version, fetching from GitHub');
+	console.log('Cache miss for version, fetching from GitHub');
 	const octokit = new Octokit();
 	const { data: releases } = await octokit.repos.listReleases({
 		owner: 'deskflow',
@@ -168,7 +169,7 @@ async function version(request: Request, env: Env): Promise<Response> {
 	}
 
 	const filteredReleases = releases.filter((release) => release.tag_name !== 'continuous');
-	console.debug(`Found ${filteredReleases.length} releases, excluding 'continuous'`);
+	console.log(`Found ${filteredReleases.length} releases, excluding 'continuous'`);
 	if (filteredReleases.length == 0) {
 		return new Response('No releases found (except continuous)', { status: 404 });
 	}
@@ -177,7 +178,7 @@ async function version(request: Request, env: Env): Promise<Response> {
 	const versionRaw = filteredReleases[0].tag_name;
 	const version = versionRaw.replace(/^v/, '');
 
-	console.debug(`Latest version is ${version}, storing in KV`);
+	console.log(`Latest version is ${version}, storing in KV`);
 	await env.APP_VERSION.put('latest', version, {
 		metadata: { fetchedAt: new Date().toISOString() },
 	});
@@ -197,14 +198,14 @@ function getOsFamily(os: string | null): string | null {
 
 function parseUserAgent(userAgent: string, headers: Headers) {
 	if (!userAgent.includes('Deskflow')) {
-		console.debug('User-Agent does not contain Deskflow, skipping parsing');
+		console.log('User-Agent does not contain Deskflow, skipping parsing');
 		return null;
 	}
 
 	// If we're using RFC 9110 User-Agent, use that instead of custom headers (which are obsolete).
 	const rfc9110 = /Deskflow\/(.+) \((.+)\)/;
 	if (rfc9110.test(userAgent)) {
-		console.debug('Parsing RFC 9110 User-Agent');
+		console.log('Parsing RFC 9110 User-Agent');
 		const parts = rfc9110.exec(userAgent);
 		if (!parts) {
 			throw new Error('Invalid RFC 9110 User-Agent format');
@@ -220,7 +221,7 @@ function parseUserAgent(userAgent: string, headers: Headers) {
 		const appLanguage = metadata[3] ?? null;
 		return { os, osFamily, appLanguage, appVersion };
 	} else {
-		console.debug('Parsing legacy User-Agent and custom headers');
+		console.log('Parsing legacy User-Agent and custom headers');
 
 		const appLanguage = headers.get('X-Deskflow-Language') ?? null;
 		const appVersion = headers.get('X-Deskflow-Version') ?? null;
@@ -240,7 +241,7 @@ function hasVoted(data: Votes[], userAgent: string): boolean {
 		return vote.userAgent === userAgent && vote.isoDateText.slice(0, 10) === now;
 	});
 
-	console.debug(`Found ${data.length} votes matching user agent and date`);
+	console.log(`Found ${data.length} votes matching user agent and date`);
 	return result;
 }
 
@@ -248,39 +249,41 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 	const userAgent = request.headers.get('user-agent') ?? null;
 	if (!userAgent) throw new Error('User-Agent header is missing');
 
-	console.debug('User-Agent:', userAgent);
+	console.log('User-Agent:', userAgent);
 	const info = parseUserAgent(userAgent, request.headers);
 
 	if (!info) {
-		console.debug('Unrecognized user agent, skipping popularity contest update');
+		console.log('Unrecognized user agent, skipping popularity contest update');
 		return;
 	}
 
 	const { os, osFamily, appLanguage, appVersion } = info;
-	console.debug('App info:', `OS=${os} (${osFamily}), Language=${appLanguage}, Version=${appVersion}`);
+	console.log('App info:', `OS=${os} (${osFamily}), Language=${appLanguage}, Version=${appVersion}`);
 
 	if (!os && !osFamily && !appLanguage && !appVersion) {
-		console.debug('No user agent info provided, skipping popularity contest update');
+		console.log('No user agent info provided, skipping popularity contest update');
 		return;
 	}
 
-	console.debug(`Checking for existing vote`);
+	console.log(`Checking for existing vote`);
 	const votesByIP = getVotesByIP(env);
 	const ip = request.headers.get('cf-connecting-ip');
 	if (!ip) throw new Error('Header missing: cf-connecting-ip');
 
 	const votes = await votesByIP.findVotes(ip);
 	if (hasVoted(votes, userAgent)) {
-		console.debug(`IP ${ip} has already voted recently, skipping popularity contest update`);
+		console.log(`IP ${ip} already voted today, skipping popularity contest update`);
 		return;
 	}
 
 	const date = new Date();
 	const monthKey = date.toISOString().substring(0, 7); // e.g. "2024-04"
 
-	console.debug(`Fetching existing stats for ${monthKey}`);
+	console.log(`Fetching existing stats for ${monthKey}`);
 	const slowKV = getSlowKV(env);
 	const stats = await slowKV.getStats(monthKey);
+
+	stats.votes = (stats.votes ?? 0) + 1;
 
 	if (os) {
 		if (!stats.os) stats.os = {};
@@ -302,10 +305,10 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 		stats.version[appVersion] = (stats.version[appVersion] ?? 0) + 1;
 	}
 
-	console.debug(`Updating popularity contest for ${monthKey}`);
+	console.log(`Updating popularity contest for ${monthKey}`);
 	await slowKV.set(monthKey, JSON.stringify(stats));
 
-	console.debug(`Recording vote for IP ${ip}`);
+	console.log(`Recording vote for IP ${ip}`);
 	await votesByIP.recordVote(votes, ip, userAgent);
 }
 
@@ -328,6 +331,7 @@ async function getSortedStats(env: Env, entryKey: string): Promise<Stats> {
 	const slowKV = getSlowKV(env);
 	const stats = await slowKV.getStats(entryKey);
 	return {
+		votes: stats.votes,
 		osFamily: stats.osFamily ? sortByValueDesc(stats.osFamily) : {},
 		os: stats.os ? sortByValueDesc(stats.os) : {},
 		language: stats.language ? sortByValueDesc(stats.language) : {},
@@ -342,11 +346,20 @@ async function stats(env: Env): Promise<Response> {
 	const thisMonthKey = date.toISOString().substring(0, 7); // e.g. "2024-04"
 	const lastMonthKey = lastMonthDate.toISOString().substring(0, 7); // e.g. "2024-03"
 
-	console.debug(`Fetching stats for ${thisMonthKey} and ${lastMonthKey}`);
+	console.log(`Fetching stats for ${thisMonthKey} and ${lastMonthKey}`);
 
 	const thisMonth = await getSortedStats(env, thisMonthKey);
 	const lastMonth = await getSortedStats(env, lastMonthKey);
 
-	const result = { thisMonth: { date: thisMonthKey, ...thisMonth }, lastMonth: { date: lastMonthKey, ...lastMonth } };
+	const result = {
+		thisMonth: {
+			date: thisMonthKey,
+			...thisMonth,
+		},
+		lastMonth: {
+			date: lastMonthKey,
+			...lastMonth,
+		},
+	};
 	return new Response(JSON.stringify(result, null, 2), { headers: { 'Content-Type': 'application/json' } });
 }
