@@ -250,6 +250,9 @@ function hasVoted(data: Votes[], userAgent: string): boolean {
 	return result;
 }
 
+// TODO: Refactor this function to run in a Durable Object instead of the main Worker.
+// This would avoid the need to wait for the DO to return data, which is slow;
+// we could just send the request to the DO let it do the work, and return immediately.
 async function updatePopularityContest(request: Request, env: Env, ctx: ExecutionContext): Promise<void> {
 	const userAgent = request.headers.get('user-agent') ?? null;
 	if (!userAgent) throw new Error('User-Agent header is missing');
