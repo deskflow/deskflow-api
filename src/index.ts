@@ -46,7 +46,7 @@ export class SlowKV extends DurableObject<Env> {
 	}
 }
 
-export class PopularityContest extends DurableObject<Env> {
+export class VotesByIP extends DurableObject<Env> {
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 	}
@@ -264,17 +264,19 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 		return;
 	}
 
-	const date = new Date();
-	const monthKey = date.toISOString().substring(0, 7); // e.g. "2024-04"
-
 	console.debug(`Checking for existing vote`);
-	const popularityContest = getPopularityContest(env);
-	const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
-	const votes = await popularityContest.findVotes(ip);
+	const votesByIP = getVotesByIP(env);
+	const ip = request.headers.get('cf-connecting-ip');
+	if (!ip) throw new Error('Header missing: cf-connecting-ip');
+
+	const votes = await votesByIP.findVotes(ip);
 	if (hasVoted(votes, userAgent)) {
 		console.debug(`IP ${ip} has already voted recently, skipping popularity contest update`);
 		return;
 	}
+
+	const date = new Date();
+	const monthKey = date.toISOString().substring(0, 7); // e.g. "2024-04"
 
 	console.debug(`Fetching existing stats for ${monthKey}`);
 	const slowKV = getSlowKV(env);
@@ -304,7 +306,7 @@ async function updatePopularityContest(request: Request, env: Env): Promise<void
 	await slowKV.set(monthKey, JSON.stringify(stats));
 
 	console.debug(`Recording vote for IP ${ip}`);
-	await popularityContest.recordVote(votes, ip, userAgent);
+	await votesByIP.recordVote(votes, ip, userAgent);
 }
 
 // Effectively a slower version of the Worker KV, but has no read/write limits.
@@ -313,9 +315,9 @@ function getSlowKV(env: Env) {
 	return env.SlowKV.get(objectId);
 }
 
-function getPopularityContest(env: Env) {
-	const objectId = env.PopularityContest.idFromName('default');
-	return env.PopularityContest.get(objectId);
+function getVotesByIP(env: Env) {
+	const objectId = env.VotesByIP.idFromName('default');
+	return env.VotesByIP.get(objectId);
 }
 
 function sortByValueDesc<T extends Record<string, number>>(obj: T): T {

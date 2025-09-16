@@ -16,9 +16,9 @@ name = "SlowKV"
 class_name = "SlowKV"
 
 [[durable_objects.bindings]]
-name = "PopularityContest"
-class_name = "PopularityContest"
+name = "VotesByIP"
+class_name = "VotesByIP"
 
 [[migrations]]
 tag = "<v1>"
-new_sqlite_classes = ["SlowKV", "PopularityContest"]
+new_sqlite_classes = ["SlowKV", "VotesByIP"]
