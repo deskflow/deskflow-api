@@ -157,6 +157,10 @@ async function version(request: Request, env: Env): Promise<Response> {
 		}
 	}
 
+	if (!env.GITHUB_TOKEN) {
+		throw new Error('Secret not found: GITHUB_TOKEN');
+	}
+
 	console.log('Cache miss for version, fetching from GitHub');
 	const octokit = new Octokit({
 		auth: env.GITHUB_TOKEN,
