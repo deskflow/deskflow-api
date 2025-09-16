@@ -4,16 +4,12 @@
 import { Octokit } from '@octokit/rest';
 import { DurableObject } from 'cloudflare:workers';
 
-// With no API token, we can only make 60 requests per hour, but if we cache the response,
-// we can limit our requests to once every 6 minutes (which is 10 per hour).
-// We could limit this further to like 1 per hour, but this might confuse developers not aware
-// of the cache ("Why is the API version response not updating?")
-// It's also worth considering that we're probably not the only users of the GitHub API from this
-// IP address, so we should be conservative to avoid hitting the rate limit.
-// If we're still hitting the rate limit, we should consider using a GitHub token, but that
-// would increase maintenance costs as it requires managing a secret (which could expire,
-// get deleted, etc).
-const cacheAgeSeconds = 60 * 6; // 6 mins (10 requests per hour)
+// We're using a GitHub token since the public rate limit is easily hit on shared egress IPs;
+// Workers from other orgs could also be hitting the GitHub API from the same IP addresses,
+// so we can't rely on the public rate limit of 60 requests per hour not being exceeded.
+// The token gives us a higher rate limit of 5000 requests per hour. We could cache for 1 second
+// instead of 60 seconds, but there's no real need since the version doesn't change often.
+const cacheAgeSeconds = 60;
 
 // Too low and it returns only the 'continuous' release.
 const releasesPerPage = 10;
@@ -162,7 +158,10 @@ async function version(request: Request, env: Env): Promise<Response> {
 	}
 
 	console.log('Cache miss for version, fetching from GitHub');
-	const octokit = new Octokit();
+	const octokit = new Octokit({
+		auth: env.GITHUB_TOKEN,
+		userAgent: 'Deskflow API',
+	});
 	const { data: releases } = await octokit.repos.listReleases({
 		owner: 'deskflow',
 		repo: 'deskflow',
