@@ -13,7 +13,7 @@ import { DurableObject } from 'cloudflare:workers';
 const cacheAgeSeconds = 60 * 5; // 5 minutes
 
 // Too low and it returns only the 'continuous' release.
-const releasesPerPage = 10;
+const releasesPerPage = 20;
 
 const repoUrl = 'https://github.com/deskflow/deskflow-api';
 
@@ -170,6 +170,7 @@ async function version(request: Request, env: Env): Promise<Response> {
 		per_page: releasesPerPage,
 	});
 
+	console.log(`Fetched ${releases.length} releases: ${releases.map((r) => r.tag_name).join(', ')}`);
 	if (releases.length === 0) {
 		return new Response('No releases found', { status: 404 });
 	}
