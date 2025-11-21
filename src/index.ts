@@ -130,6 +130,34 @@ function index(url: URL) {
 	});
 }
 
+async function getLatestRelease(octokit: Octokit) {
+	let page = 1;
+	const perPage = 100; // 100 is max (30 is default)
+	const maxPages = 10; // Prevent infinite loop
+	while (page <= maxPages) {
+		const { data: releases } = await octokit.repos.listReleases({
+			owner: 'deskflow',
+			repo: 'deskflow',
+			per_page: perPage,
+			page,
+		});
+
+		// Some pages have hidden (deleted) releases, so having pages with no releases is not a
+		// reliable indicator that we've reached the end.
+		// This is why we have to manually paginate rather than using `octokit.paginate` (which
+		// stops when an empty page is reached).
+		if (releases.length === 0) continue;
+
+		const stable = releases.find((r) => !r.prerelease);
+		if (stable) {
+			console.log(`Found stable release ${stable.tag_name} on page ${page}`);
+			return stable;
+		}
+		page++;
+	}
+	return null;
+}
+
 async function version(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
 
@@ -164,25 +192,13 @@ async function version(request: Request, env: Env): Promise<Response> {
 		auth: env.GITHUB_TOKEN,
 		userAgent: 'Deskflow API',
 	});
-	const { data: releases } = await octokit.repos.listReleases({
-		owner: 'deskflow',
-		repo: 'deskflow',
-		per_page: releasesPerPage,
-	});
-
-	console.log(`Fetched ${releases.length} releases: ${releases.map((r) => r.tag_name).join(', ')}`);
-	if (releases.length === 0) {
-		return new Response('No releases found', { status: 404 });
-	}
-
-	const filteredReleases = releases.filter((release) => release.tag_name !== 'continuous');
-	console.log(`Found ${filteredReleases.length} releases, excluding 'continuous'`);
-	if (filteredReleases.length == 0) {
-		return new Response('No releases found (except continuous)', { status: 404 });
+	const latestRelease = await getLatestRelease(octokit);
+	if (!latestRelease) {
+		throw new Error('No stable releases found');
 	}
 
 	// Backward compatibility: Strip any 'v' prefix, since the GUI doesn't expect one.
-	const versionRaw = filteredReleases[0].tag_name;
+	const versionRaw = latestRelease.tag_name;
 	const version = versionRaw.replace(/^v/, '');
 
 	console.log(`Latest version is ${version}, storing in KV`);
