@@ -209,11 +209,12 @@ async function version(request: Request, env: Env): Promise<Response> {
 	return new Response(version);
 }
 
+// Converts the result of Qt `QSysInfo::kernelType` to a normalized OS family.
 function getOsFamily(os: string | null): string | null {
 	const lower = os?.toLowerCase() ?? null;
 	if (!lower) return null;
-	if (lower.includes('windows')) return 'Windows';
-	if (lower.includes('macos')) return 'macOS';
+	if (['windows', 'winnt'].some((term) => lower.includes(term))) return 'Windows';
+	if (['macos', 'darwin'].some((term) => lower.includes(term))) return 'macOS';
 	if (['linux', 'flatpak'].some((term) => lower.includes(term))) return 'Linux';
 	if (lower.includes('bsd')) return 'BSD';
 	return 'Other';
