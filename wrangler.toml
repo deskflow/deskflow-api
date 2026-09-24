@@ -1,5 +1,6 @@
 #:schema node_modules/wrangler/config-schema.json
 name = "deskflow-api"
+account_id = "9d0c234de77211c6cbb037876069b0c2"
 main = "src/index.ts"
 compatibility_date = "2024-10-11"
 compatibility_flags = ["nodejs_compat"]
