@@ -7,10 +7,6 @@ compatibility_flags = ["nodejs_compat"]
 [observability]
 enabled = true
 
-[[kv_namespaces]]
-binding = "APP_VERSION"
-id = "9eaad23626614bccaf775d1af0069a6c"
-
 [[migrations]]
 tag = "<v1>"
 new_sqlite_classes = ["SlowKV", "VotesByIP"]
