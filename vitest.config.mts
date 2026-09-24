@@ -2,5 +2,10 @@ import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-	plugins: [cloudflareTest({ wrangler: { configPath: './wrangler.toml' } })],
+	plugins: [
+		cloudflareTest({
+			wrangler: { configPath: './wrangler.toml' },
+			miniflare: { bindings: { GITHUB_TOKEN: 'test-token' } },
+		}),
+	],
 });
