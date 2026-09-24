@@ -11,14 +11,10 @@ enabled = true
 binding = "APP_VERSION"
 id = "9eaad23626614bccaf775d1af0069a6c"
 
-[[durable_objects.bindings]]
-name = "SlowKV"
-class_name = "SlowKV"
-
-[[durable_objects.bindings]]
-name = "VotesByIP"
-class_name = "VotesByIP"
-
 [[migrations]]
 tag = "<v1>"
 new_sqlite_classes = ["SlowKV", "VotesByIP"]
+
+[[migrations]]
+tag = "v2"
+deleted_classes = ["SlowKV", "VotesByIP"]
