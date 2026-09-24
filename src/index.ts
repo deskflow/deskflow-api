@@ -78,18 +78,19 @@ async function version(url: URL, env: Env, ctx: ExecutionContext): Promise<Respo
 }
 
 async function fetchLatestVersion(env: Env): Promise<string> {
-	if (!env.GITHUB_TOKEN) {
-		throw new Error('Secret not found: GITHUB_TOKEN');
+	const headers: Record<string, string> = {
+		Accept: 'application/vnd.github+json',
+		'User-Agent': 'Deskflow API',
+	};
+
+	// The anonymous rate limit is shared with everyone on the same egress IP, so prefer a token.
+	if (env.GITHUB_TOKEN) {
+		headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+	} else {
+		console.warn('No GitHub token set, using the anonymous rate limit');
 	}
 
-	// Shared egress IPs make the anonymous GitHub rate limit unreliable, so a token is required.
-	const response = await fetch(latestReleaseUrl, {
-		headers: {
-			Accept: 'application/vnd.github+json',
-			Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-			'User-Agent': 'Deskflow API',
-		},
-	});
+	const response = await fetch(latestReleaseUrl, { headers });
 	if (!response.ok) {
 		throw new Error(`GitHub responded with ${response.status}: ${await response.text()}`);
 	}
