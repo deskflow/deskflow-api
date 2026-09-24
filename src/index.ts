@@ -1,25 +1,17 @@
 // SPDX-Copyright-Text: 2024-2025 Symless Ltd.
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { Octokit } from '@octokit/rest';
-
-// Important: Cache lifetime must not be too low or we'll hit the KV put rate limit.
-// We're using a GitHub token since the public rate limit is easily hit on shared egress IPs;
-// Workers from other orgs could also be hitting the GitHub API from the same IP addresses,
-// so we can't rely on the public rate limit of 60 requests per hour not being exceeded.
-// The token gives us a higher rate limit of 5000 requests per hour, but there is no need for
-// us to update the cache often, and it takes around 2 seconds for GitHub to respond.
-const cacheAgeSeconds = 60 * 5; // 5 minutes
-
-// Too low and it returns only the 'continuous' release.
-const releasesPerPage = 20;
+// The Cache API is per data center, so each one asks GitHub at most once per cache lifetime.
+// Keep this well above (data centers / GitHub's 5000 per hour token limit).
+const cacheAgeSeconds = 60 * 10;
 
 const repoUrl = 'https://github.com/deskflow/deskflow-api';
+const latestReleaseUrl = 'https://api.github.com/repos/deskflow/deskflow/releases/latest';
 
 export default {
-	async fetch(request: Request, env: Env): Promise<Response> {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		try {
-			return await handleRequest(request, env);
+			return await handleRequest(request, env, ctx);
 		} catch (error) {
 			console.error('Server error:', error);
 
@@ -31,12 +23,12 @@ export default {
 	},
 } satisfies ExportedHandler<Env>;
 
-async function handleRequest(request: Request, env: Env): Promise<Response> {
+async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
 	if (url.pathname === '/') {
 		return index(url);
 	} else if (url.pathname.startsWith('/version')) {
-		return await version(request, env);
+		return await version(url, env, ctx);
 	} else {
 		return new Response('Not found', { status: 404 });
 	}
@@ -63,81 +55,47 @@ function index(url: URL) {
 	});
 }
 
-async function getLatestRelease(octokit: Octokit) {
-	let page = 1;
-	const perPage = 100; // 100 is max (30 is default)
-	const maxPages = 10; // Prevent infinite loop
-	while (page <= maxPages) {
-		const { data: releases } = await octokit.repos.listReleases({
-			owner: 'deskflow',
-			repo: 'deskflow',
-			per_page: perPage,
-			page,
-		});
-
-		// Some pages have hidden (deleted) releases, so having pages with no releases is not a
-		// reliable indicator that we've reached the end.
-		// This is why we have to manually paginate rather than using `octokit.paginate` (which
-		// stops when an empty page is reached).
-		if (releases.length === 0) continue;
-
-		const stable = releases.find((r) => !r.prerelease);
-		if (stable) {
-			console.log(`Found stable release ${stable.tag_name} on page ${page}`);
-			return stable;
-		}
-		page++;
-	}
-	return null;
-}
-
-async function version(request: Request, env: Env): Promise<Response> {
-	const url = new URL(request.url);
-
+async function version(url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const fake = url.searchParams.get('fake');
 	if (fake) {
 		return new Response(fake);
 	}
 
-	// Previously we used the Worker Cache API, but this was not a valid approach for avoiding
-	// rate limits, since the cache is per-POP (Cloudflare point of presence) of which there could
-	// be hundreds worldwide. So we switched to using Workers KV, which is global.
-	const { value: cachedVersion, metadata } = await env.APP_VERSION.getWithMetadata('latest');
-	if (cachedVersion) {
-		const { fetchedAt } = metadata as { fetchedAt: string };
-		if (!fetchedAt) throw new Error('Metadata missing field: fetchedAt');
-
-		const fetchedAtDate = new Date(fetchedAt);
-		const ageSeconds = (Date.now() - fetchedAtDate.getTime()) / 1000;
-		const isValid = ageSeconds < cacheAgeSeconds;
-		console.log(`Version KV found, value=${cachedVersion}, age=${Math.round(ageSeconds)}s (${isValid ? 'valid' : 'expired'})`);
-		if (isValid) {
-			return new Response(cachedVersion);
-		}
+	const cacheKey = new Request(`${url.origin}/version`);
+	const cached = await caches.default.match(cacheKey);
+	if (cached) {
+		return cached;
 	}
 
+	const version = await fetchLatestVersion(env);
+	console.log(`Latest version from GitHub: ${version}`);
+
+	const response = new Response(version, {
+		headers: { 'Cache-Control': `public, max-age=${cacheAgeSeconds}` },
+	});
+	ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
+	return response;
+}
+
+async function fetchLatestVersion(env: Env): Promise<string> {
 	if (!env.GITHUB_TOKEN) {
 		throw new Error('Secret not found: GITHUB_TOKEN');
 	}
 
-	console.log('Cache miss for version, fetching from GitHub');
-	const octokit = new Octokit({
-		auth: env.GITHUB_TOKEN,
-		userAgent: 'Deskflow API',
+	// Shared egress IPs make the anonymous GitHub rate limit unreliable, so a token is required.
+	const response = await fetch(latestReleaseUrl, {
+		headers: {
+			Accept: 'application/vnd.github+json',
+			Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+			'User-Agent': 'Deskflow API',
+		},
 	});
-	const latestRelease = await getLatestRelease(octokit);
-	if (!latestRelease) {
-		throw new Error('No stable releases found');
+	if (!response.ok) {
+		throw new Error(`GitHub responded with ${response.status}: ${await response.text()}`);
 	}
 
-	// Backward compatibility: Strip any 'v' prefix, since the GUI doesn't expect one.
-	const versionRaw = latestRelease.tag_name;
-	const version = versionRaw.replace(/^v/, '');
+	const release = (await response.json()) as { tag_name: string };
 
-	console.log(`Latest version is ${version}, storing in KV`);
-	await env.APP_VERSION.put('latest', version, {
-		metadata: { fetchedAt: new Date().toISOString() },
-	});
-
-	return new Response(version);
+	// The GUI doesn't expect a 'v' prefix.
+	return release.tag_name.replace(/^v/, '');
 }
