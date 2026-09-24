@@ -170,3 +170,7 @@ dist
 
 .dev.vars
 .wrangler/
+
+# AI files
+
+CLAUDE.md
