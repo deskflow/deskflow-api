@@ -1,25 +1,60 @@
-// test/index.spec.ts
-import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloudflare:test';
-import { describe, it, expect } from 'vitest';
+import { createExecutionContext, SELF, waitOnExecutionContext } from 'cloudflare:test';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 
-// For now, you'll need to do something like this to get a correctly-typed
-// `Request` to pass to `worker.fetch()`.
-const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
-describe('Hello World worker', () => {
-	it('responds with Hello World! (unit style)', async () => {
-		const request = new IncomingRequest('http://example.com');
-		// Create an empty context to pass to `worker.fetch()`.
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		// Wait for all `Promise`s passed to `ctx.waitUntil()` to settle before running test assertions
-		await waitOnExecutionContext(ctx);
-		expect(await response.text()).toMatchInlineSnapshot(`"Hello World!"`);
+describe('worker', () => {
+	it('serves the index page', async () => {
+		const response = await SELF.fetch('https://example.com/');
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain('Deskflow API');
 	});
 
-	it('responds with Hello World! (integration style)', async () => {
-		const response = await SELF.fetch('https://example.com');
-		expect(await response.text()).toMatchInlineSnapshot(`"Hello World!"`);
+	it('returns 404 for unknown paths', async () => {
+		const response = await SELF.fetch('https://example.com/stats');
+
+		expect(response.status).toBe(404);
+	});
+
+	it('returns the fake version when asked', async () => {
+		const response = await SELF.fetch('https://example.com/version?fake=9.9.9');
+
+		expect(await response.text()).toBe('9.9.9');
+	});
+
+	it('returns the latest GitHub release without the v prefix', async () => {
+		const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ tag_name: 'v1.26.0' }));
+
+		const response = await SELF.fetch('https://example.com/version');
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe('1.26.0');
+		const headers = fetchSpy.mock.calls[0][1]?.headers as Record<string, string>;
+		expect(headers.Authorization).toBe('Bearer test-token');
+	});
+
+	it('calls GitHub anonymously when no token is set', async () => {
+		const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ tag_name: 'v1.26.0' }));
+		const ctx = createExecutionContext();
+
+		const response = await worker.fetch(new Request('https://no-token.example.com/version'), {} as Env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(await response.text()).toBe('1.26.0');
+		const headers = fetchSpy.mock.calls[0][1]?.headers as Record<string, string>;
+		expect(headers.Authorization).toBeUndefined();
+	});
+
+	it('returns 500 with a request ID when GitHub fails', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('Bad credentials', { status: 401 }));
+
+		const response = await SELF.fetch('https://another.example.com/version', { headers: { 'cf-ray': 'abc123' } });
+
+		expect(response.status).toBe(500);
+		expect(await response.text()).toContain('abc123');
 	});
 });
